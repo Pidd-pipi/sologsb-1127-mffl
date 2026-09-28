@@ -1,14 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Button, Card, Col, Descriptions, Drawer, List, Row, Select, Space, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import MapPanel from '../components/common/MapPanel';
 import FacilityIcon from '../components/common/FacilityIcon';
 import StatusBadge from '../components/common/StatusBadge';
+import OpenStatusTag from '../components/common/OpenStatusTag';
 import EmptyState from '../components/common/EmptyState';
 import { usePointStore } from '../stores/pointStore';
 import { useUiStore } from '../stores/uiStore';
 import { FACILITY_TYPES, type AccessPoint } from '../types/point';
 import { isOverdue } from '../utils/format';
+import { formatWeeklyHours, pointOpenStatus } from '../utils/hours';
+import { useNow } from '../hooks/useNow';
 
 export default function MapView() {
   const points = usePointStore((s) => s.points);
@@ -18,6 +21,7 @@ export default function MapView() {
   const setTypeFilter = useUiStore((s) => s.setMapFacilityFilter);
   const [activeId, setActiveId] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const now = useNow();
 
   const visible = useMemo(
     () => (typeFilter ? points.filter((p) => p.facilityType === typeFilter) : points),
@@ -35,7 +39,22 @@ export default function MapView() {
     : [];
   const activePlans = active ? rectifies.filter((r) => r.pointId === active.id) : [];
 
-  const noteOf = (p: AccessPoint) => latestOf(p.id)?.conclusion ?? '未核验';
+  const noteOf = useCallback(
+    (p: AccessPoint) => {
+      const s = pointOpenStatus(p, now);
+      if (s.kind === 'closed') {
+        return s.closureReason ? `闭馆·${s.label.replace('已关闭', '')}` : s.label;
+      }
+      return s.label;
+    },
+    [now],
+  );
+
+  const statusOf = useCallback((p: AccessPoint) => pointOpenStatus(p, now).kind, [now]);
+
+  const openCount = visible.filter((p) => pointOpenStatus(p, now).kind === 'open').length;
+  const closingCount = visible.filter((p) => pointOpenStatus(p, now).kind === 'closing').length;
+  const closedCount = visible.length - openCount - closingCount;
 
   return (
     <div>
@@ -58,6 +77,9 @@ export default function MapView() {
           <Tag color="blue" data-testid="map-visible-count">
             可见 {visible.length}
           </Tag>
+          <Tag color="success" data-testid="map-open-count">开放 {openCount}</Tag>
+          <Tag color="warning" data-testid="map-closing-count">即将关闭 {closingCount}</Tag>
+          <Tag color="default" data-testid="map-closed-count">已关闭 {closedCount}</Tag>
         </Space>
       </div>
 
@@ -73,6 +95,7 @@ export default function MapView() {
             height={560}
             title="设施点位分布（点选查看核验摘要）"
             noteOf={noteOf}
+            statusOf={statusOf}
           />
         </Col>
         <Col xs={24} lg={7}>
@@ -90,7 +113,10 @@ export default function MapView() {
                         setActiveId(p.id);
                         setDrawerOpen(true);
                       }}
-                      actions={[<StatusBadge key="s" value={latest?.conclusion ?? '未核验'} kind="conclusion" />]}
+                      actions={[
+                        <OpenStatusTag key="o" point={p} at={now} size="small" />,
+                        <StatusBadge key="s" value={latest?.conclusion ?? '未核验'} kind="conclusion" />,
+                      ]}
                     >
                       <List.Item.Meta
                         avatar={<FacilityIcon type={p.facilityType} size={22} />}
@@ -140,6 +166,24 @@ export default function MapView() {
                 {active.lng.toFixed(6)}, {active.lat.toFixed(6)}
               </Descriptions.Item>
             </Descriptions>
+
+            <Card size="small" title="开放状态" data-testid="drawer-hours">
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                <OpenStatusTag point={active} at={now} showNext />
+                <Typography.Text type="secondary" className="gb-muted">
+                  开放时段：{formatWeeklyHours(active.weeklyHours)}
+                </Typography.Text>
+                {(active.closureDays || []).length ? (
+                  <Typography.Text type="secondary" className="gb-muted">
+                    闭馆日：
+                    {[...(active.closureDays || [])]
+                      .sort((a, b) => (a.date < b.date ? -1 : 1))
+                      .map((c) => `${c.date}${c.reason ? `（${c.reason}）` : ''}`)
+                      .join('、')}
+                  </Typography.Text>
+                ) : null}
+              </Space>
+            </Card>
 
             <Card size="small" title={`核验历史（${activeInspections.length} 条）`}>
               {activeInspections.length ? (

@@ -5,7 +5,9 @@ import type { RouteSegment } from '../types/route';
 import { makeId, toPlain } from '../utils/format';
 import { judgeSegment, buildVerdict } from '../utils/routeCheck';
 import { segmentLength } from '../utils/geo';
+import { chainTimings, geoLegs, type ChainLeg } from '../utils/routeTime';
 import type { RouteVerdict } from '../types/route';
+import type { ChainPointTiming } from '../utils/routeTime';
 
 /** 编辑中的路段（尚未落库） */
 export interface DraftSegment {
@@ -26,12 +28,17 @@ interface RouteState {
   error: string;
   draftName: string;
   chain: string[];
+  /** 规划出发时刻 ISO 字符串，空串表示「现在出发」 */
+  departureISO: string;
   draftSegments: DraftSegment[];
   verdict: RouteVerdict | null;
   load: () => Promise<void>;
   setDraftName: (name: string) => void;
+  setDepartureISO: (iso: string) => void;
   setChain: (ids: string[]) => void;
   toggleChainPoint: (id: string) => void;
+  /** 检查链上各点位在预计到达时刻是否开放，返回不开放的点位时序 */
+  checkChainAtDeparture: (points: AccessPoint[]) => ChainPointTiming[];
   buildChainSegments: (points: AccessPoint[]) => void;
   updateDraftSegment: (key: string, patch: Partial<DraftSegment>) => void;
   removeDraftSegment: (key: string) => void;
@@ -51,6 +58,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   error: '',
   draftName: '无障碍通行路线',
   chain: [],
+  departureISO: '',
   draftSegments: [],
   verdict: null,
 
@@ -71,6 +79,21 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   },
 
   setDraftName: (name) => set({ draftName: name }),
+
+  setDepartureISO: (iso) => set({ departureISO: iso, verdict: null }),
+
+  /**
+   * 链上各点位在「出发时刻 + 累计里程」推算出的到达时刻的开放情况。
+   * 已串联路段用实测长度，未串联时用经纬度大圆距离估算。
+   */
+  checkChainAtDeparture: (points) => {
+    const { chain, draftSegments, departureISO } = get();
+    const departure = departureISO ? new Date(departureISO) : new Date();
+    const legs: ChainLeg[] = draftSegments.length
+      ? draftSegments.map((s) => ({ fromPointId: s.fromPointId, toPointId: s.toPointId, length: s.length }))
+      : geoLegs(points, chain);
+    return chainTimings(points, chain, legs, departure);
+  },
 
   setChain: (ids) => set({ chain: ids, verdict: null }),
 
@@ -128,6 +151,22 @@ export const useRouteStore = create<RouteState>((set, get) => ({
 
   saveRoute: async () => {
     const { draftSegments, draftName } = get();
+    if (!draftSegments.length) return 0;
+    // 以已串联段为准重建链（用户可能已删除个别段），避免校验残留的链上点位
+    const ordered = [...draftSegments].sort((a, b) => a.order - b.order);
+    const effectiveChain = ordered.length
+      ? [ordered[0].fromPointId, ...ordered.map((s) => s.toPointId)]
+      : [];
+    const closed = chainTimings(
+      await db.points.toArray(),
+      effectiveChain,
+      ordered.map((s) => ({ fromPointId: s.fromPointId, toPointId: s.toPointId, length: s.length })),
+      get().departureISO ? new Date(get().departureISO) : new Date(),
+    ).filter((t) => t.point && !t.open);
+    if (closed.length) {
+      const names = closed.map((t) => t.point?.name).filter(Boolean).join('、');
+      throw new Error(`到达下列点位时不在开放时段，不能编入路线：${names}`);
+    }
     const rows: RouteSegment[] = draftSegments.map((seg) =>
       toPlain({
         id: makeId('rts'),
@@ -154,5 +193,6 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     return rows.length;
   },
 
+  // 清空编制时保留出发时刻，方便连续编制下一条路线
   resetDraft: () => set({ draftSegments: [], verdict: null, chain: [] }),
 }));

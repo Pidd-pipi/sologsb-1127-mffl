@@ -8,6 +8,7 @@ import {
   Divider,
   Form,
   Input,
+  Modal,
   Row,
   Select,
   Space,
@@ -18,18 +19,23 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
+import { ClockCircleOutlined, PlusOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Link, useParams } from 'react-router-dom';
 import MapPanel from '../components/common/MapPanel';
 import MeasureInput from '../components/common/MeasureInput';
 import StatusBadge from '../components/common/StatusBadge';
 import FacilityIcon from '../components/common/FacilityIcon';
 import EmptyState from '../components/common/EmptyState';
+import OpenStatusTag from '../components/common/OpenStatusTag';
+import HoursEditor, { type HoursValue } from '../components/common/HoursEditor';
 import { usePointStore } from '../stores/pointStore';
+import { WEEKDAY_LABELS } from '../types/point';
 import { OCCUPIED_LEVELS, type Inspection, type OccupiedLevel } from '../types/inspection';
 import type { RectifyPlan } from '../types/rectify';
 import { judgeInspection } from '../utils/routeCheck';
 import { addDays, isOverdue, todayStr } from '../utils/format';
+import { formatNextOpen, formatWeeklyHours, pointOpenStatus, weekdayOf } from '../utils/hours';
+import { useNow } from '../hooks/useNow';
 
 interface InlineInspection {
   date: string;
@@ -51,6 +57,8 @@ export default function PointDetail() {
   const loaded = usePointStore((s) => s.loaded);
   const addInspection = usePointStore((s) => s.addInspection);
   const addRectify = usePointStore((s) => s.addRectify);
+  const updatePoint = usePointStore((s) => s.updatePoint);
+  const now = useNow();
 
   const point = useMemo(() => points.find((p) => p.id === id), [points, id]);
   const history = useMemo(
@@ -77,6 +85,9 @@ export default function PointDetail() {
     problem: '',
   }));
   const [saving, setSaving] = useState(false);
+  const [hoursOpen, setHoursOpen] = useState(false);
+  const [hoursDraft, setHoursDraft] = useState<HoursValue>({ weeklyHours: [], closureDays: [] });
+  const [savingHours, setSavingHours] = useState(false);
 
   const judgement = useMemo(
     () =>
@@ -214,6 +225,30 @@ export default function PointDetail() {
   ];
 
   const latest = history[0];
+  const openStatus = point ? pointOpenStatus(point, now) : null;
+
+  const openHoursModal = () => {
+    if (!point) return;
+    setHoursDraft({ weeklyHours: point.weeklyHours || [], closureDays: point.closureDays || [] });
+    setHoursOpen(true);
+  };
+
+  const handleSaveHours = async () => {
+    if (!point) return;
+    setSavingHours(true);
+    try {
+      await updatePoint(point.id, {
+        weeklyHours: hoursDraft.weeklyHours,
+        closureDays: hoursDraft.closureDays,
+      });
+      message.success('开放时段已更新，路线与地图状态已重算');
+      setHoursOpen(false);
+    } catch (e) {
+      message.error(`时段保存失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingHours(false);
+    }
+  };
 
   return (
     <div>
@@ -225,6 +260,7 @@ export default function PointDetail() {
               {point.name}
             </h1>
             <StatusBadge value={latest?.conclusion ?? '未核验'} kind="conclusion" bordered />
+            {point ? <OpenStatusTag point={point} at={now} /> : null}
           </Space>
           <Typography.Text type="secondary">
             {point.code} · {point.district} · {point.location || '未填写所在道路或建筑'}
@@ -261,6 +297,53 @@ export default function PointDetail() {
                 {point.lng.toFixed(6)}, {point.lat.toFixed(6)}
               </Descriptions.Item>
               <Descriptions.Item label="核验次数">{history.length} 次</Descriptions.Item>
+            </Descriptions>
+          </Card>
+
+          <Card
+            size="small"
+            style={{ marginTop: 16 }}
+            title={
+              <Space size={8}>
+                <ClockCircleOutlined />
+                <span>开放时段</span>
+                {openStatus ? <OpenStatusTag point={point} at={now} size="small" /> : null}
+              </Space>
+            }
+            extra={
+              <Button size="small" onClick={openHoursModal} data-testid="edit-hours">
+                编辑时段
+              </Button>
+            }
+            data-testid="point-hours-card"
+          >
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label="每周开放">
+                {formatWeeklyHours(point.weeklyHours)}
+              </Descriptions.Item>
+              <Descriptions.Item label="例外闭馆">
+                {(point.closureDays || []).length ? (
+                  <Space direction="vertical" size={2}>
+                    {[...(point.closureDays || [])]
+                      .sort((a, b) => (a.date < b.date ? -1 : 1))
+                      .map((c) => (
+                        <Tag key={c.date} color={c.date === todayStr() ? 'error' : 'default'}>
+                          {c.date}（{WEEKDAY_LABELS[weekdayOf(new Date(`${c.date}T12:00:00`))]}）
+                          {c.reason ? ` ${c.reason}` : ' 闭馆'}
+                        </Tag>
+                      ))}
+                  </Space>
+                ) : (
+                  <Typography.Text type="secondary">暂无</Typography.Text>
+                )}
+              </Descriptions.Item>
+              <Descriptions.Item label="最近可开放">
+                {openStatus?.kind === 'closed' ? (
+                  <Typography.Text type="secondary">{formatNextOpen(openStatus.nextOpen)}</Typography.Text>
+                ) : (
+                  <Typography.Text type="secondary">当前可进入</Typography.Text>
+                )}
+              </Descriptions.Item>
             </Descriptions>
           </Card>
         </Col>
@@ -422,6 +505,27 @@ export default function PointDetail() {
           />
         )}
       </Card>
+
+      <Modal
+        title={`编辑开放时段 · ${point.name}`}
+        open={hoursOpen}
+        onCancel={() => setHoursOpen(false)}
+        onOk={handleSaveHours}
+        confirmLoading={savingHours}
+        okText="保存时段"
+        width={760}
+        destroyOnClose
+        data-testid="hours-modal"
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          跨夜时段按到达日次日判定；闭馆日命中当天将覆盖周计划。保存后地图、总览与已保存路线立即重算。
+        </Typography.Paragraph>
+        <HoursEditor
+          facilityType={point.facilityType}
+          value={hoursDraft}
+          onChange={setHoursDraft}
+        />
+      </Modal>
     </div>
   );
 }

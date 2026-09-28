@@ -21,6 +21,41 @@ export const DISTRICTS = ['东城区', '西城区', '朝阳区', '海淀区', '�
 
 export type District = (typeof DISTRICTS)[number];
 
+/** 星期几：1=周一 … 7=周日 */
+export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+export const WEEKDAYS: Weekday[] = [1, 2, 3, 4, 5, 6, 7];
+
+export const WEEKDAY_LABELS: Record<number, string> = {
+  1: '周一',
+  2: '周二',
+  3: '周三',
+  4: '周四',
+  5: '周五',
+  6: '周六',
+  7: '周日',
+};
+
+/**
+ * 每周固定开放时段。
+ * 同一天可配置多条；end <= start 表示跨夜（按到达日的次日规则判定）。
+ */
+export interface WeeklySlot {
+  weekday: Weekday;
+  /** 开始时刻 HH:mm */
+  start: string;
+  /** 结束时刻 HH:mm，不晚于 start 时视为营业至次日该时刻 */
+  end: string;
+}
+
+/** 例外闭馆日：优先级高于每周计划，可跨年配置 */
+export interface ClosureDay {
+  /** YYYY-MM-DD */
+  date: string;
+  /** 闭馆原因，如 设备检修 / 法定节假日 */
+  reason: string;
+}
+
 /** 养护单位 */
 export const MAINTAIN_UNITS = [
   '市政道路养护一所',
@@ -45,6 +80,10 @@ export interface AccessPoint {
   /** 建成年代 */
   builtYear: number;
   maintainUnit: string;
+  /** 每周固定开放时段；空数组视为全天开放（室外设施） */
+  weeklyHours: WeeklySlot[];
+  /** 例外闭馆日；命中当天周计划失效（含跨夜时段的到达日判定） */
+  closureDays: ClosureDay[];
   createdAt: string;
   updatedAt: string;
 }

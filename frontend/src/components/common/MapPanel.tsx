@@ -5,6 +5,7 @@ import { FACILITY_COLORS } from './FacilityIcon';
 import { boundsOf, metersPerPixel, toGridXY } from '../../utils/geo';
 import { useAmapLoader } from '../../hooks/useAmapLoader';
 import { truncate } from '../../utils/format';
+import type { OpenStatusKind } from '../../utils/hours';
 
 interface MapPanelProps {
   points: AccessPoint[];
@@ -17,9 +18,28 @@ interface MapPanelProps {
   showLegend?: boolean;
   /** 点位补充说明（如核验结论），显示在标记提示里 */
   noteOf?: (point: AccessPoint) => string;
+  /** 点位实时开放状态，驱动标记描边/状态点 */
+  statusOf?: (point: AccessPoint) => OpenStatusKind;
 }
 
 const VIEW_W = 800;
+
+/** 开放状态对应的描边色（与 Tag 语义一致） */
+const STATUS_RING: Record<OpenStatusKind, string> = {
+  open: '#389e0d',
+  closing: '#d48806',
+  closed: '#8c8c8c',
+};
+const STATUS_DOT: Record<OpenStatusKind, string> = {
+  open: '#52c41a',
+  closing: '#faad14',
+  closed: '#bfbfbf',
+};
+const STATUS_TEXT: Record<OpenStatusKind, string> = {
+  open: '当前开放',
+  closing: '即将关闭',
+  closed: '已关闭',
+};
 
 /**
  * 地图容器：封装高德 JS API 与本地 SVG 网格降级两种模式。
@@ -34,6 +54,7 @@ export default function MapPanel({
   title = '设施点位分布',
   showLegend = true,
   noteOf,
+  statusOf,
 }: MapPanelProps) {
   const { status, amap, error, usingFallback } = useAmapLoader();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -68,10 +89,13 @@ export default function MapPanel({
     ]);
 
     const markers = points.map((p) => {
+      const kind = statusOf?.(p) ?? 'open';
+      const dot = STATUS_DOT[kind];
+      const noteText = noteOf?.(p) ?? '';
       const marker = new amap.Marker({
         position: [p.lng, p.lat],
-        title: p.name,
-        content: `<div style="padding:4px 8px;border-radius:10px;background:${FACILITY_COLORS[p.facilityType]};color:#fff;font-size:12px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3)">${p.facilityType}·${p.name}</div>`,
+        title: `${p.name}（${noteText}）`,
+        content: `<div style="display:flex;align-items:center;gap:4px;padding:4px 8px;border-radius:10px;background:${FACILITY_COLORS[p.facilityType]};color:#fff;font-size:12px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3)"><span style="width:8px;height:8px;border-radius:50%;background:${dot};display:inline-block;border:1.5px solid #fff"></span>${p.facilityType}·${truncate(p.name, 8)}</div>`,
       });
       return marker;
     });
@@ -79,7 +103,7 @@ export default function MapPanel({
     return () => {
       markers.forEach((m) => instance.remove(m));
     };
-  }, [amap, status, usingFallback, points, bounds]);
+  }, [amap, status, usingFallback, points, bounds, statusOf, noteOf]);
 
   useEffect(
     () => () => {
@@ -199,12 +223,15 @@ export default function MapPanel({
               const color = FACILITY_COLORS[p.facilityType] ?? '#1668dc';
               const active = p.id === selectedId;
               const note = noteOf ? noteOf(p) : '';
+              const kind = statusOf?.(p);
+              const ring = kind ? STATUS_RING[kind] : '';
               const labelY = placed.labelY[p.id] ?? -14;
               const below = labelY > 0;
               return (
                 <g
                   key={p.id}
                   data-testid={`map-marker-${p.id}`}
+                  data-open-status={kind ?? 'unknown'}
                   transform={`translate(${x},${y})`}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -213,6 +240,9 @@ export default function MapPanel({
                   style={{ cursor: onSelect ? 'pointer' : 'default' }}
                 >
                   {active ? <circle r={16} fill={color} opacity={0.22} /> : null}
+                  {ring && !active ? (
+                    <circle r={11} fill="none" stroke={ring} strokeWidth={2.5} />
+                  ) : null}
                   <circle r={active ? 10 : 8} fill={color} stroke="#fff" strokeWidth={2} />
                   <text x={0} y={4} textAnchor="middle" fontSize="9" fill="#fff" fontWeight="600">
                     {p.code.slice(-3)}
@@ -271,6 +301,23 @@ export default function MapPanel({
                       }}
                     />
                     {t}
+                  </span>
+                ))
+              : null}
+            {statusOf
+              ? (['open', 'closing', 'closed'] as OpenStatusKind[]).map((k) => (
+                  <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                    <span
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        background: '#fff',
+                        border: `2.5px solid ${STATUS_RING[k]}`,
+                        display: 'inline-block',
+                      }}
+                    />
+                    {STATUS_TEXT[k]}
                   </span>
                 ))
               : null}

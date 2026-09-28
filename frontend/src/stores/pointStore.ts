@@ -14,6 +14,7 @@ interface PointState {
   error: string;
   load: () => Promise<void>;
   addPoint: (draft: AccessPointDraft) => Promise<AccessPoint>;
+  updatePoint: (id: string, patch: Partial<AccessPoint>) => Promise<void>;
   addInspection: (draft: InspectionDraft) => Promise<Inspection>;
   addRectify: (draft: RectifyPlanDraft) => Promise<RectifyPlan>;
   updateRectify: (id: string, patch: Partial<RectifyPlan>) => Promise<void>;
@@ -62,6 +63,16 @@ export const usePointStore = create<PointState>((set, get) => ({
     await db.points.put(point);
     set((s) => ({ points: [...s.points, point].sort((a, b) => a.code.localeCompare(b.code)) }));
     return point;
+  },
+
+  updatePoint: async (id, patch) => {
+    const plain = toPlain({ ...patch, updatedAt: new Date().toISOString() });
+    await db.points.update(id, plain);
+    set((s) => ({
+      points: s.points
+        .map((p) => (p.id === id ? { ...p, ...plain } : p))
+        .sort((a, b) => a.code.localeCompare(b.code)),
+    }));
   },
 
   addInspection: async (draft) => {

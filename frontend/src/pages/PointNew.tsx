@@ -29,11 +29,15 @@ import {
   FACILITY_TYPES,
   MAINTAIN_UNITS,
   type AccessPoint,
+  type ClosureDay,
   type FacilityType,
+  type WeeklySlot,
 } from '../types/point';
 import { OCCUPIED_LEVELS, type OccupiedLevel } from '../types/inspection';
 import { judgeInspection } from '../utils/routeCheck';
+import { defaultWeeklyHours } from '../utils/hours';
 import { todayStr } from '../utils/format';
+import HoursEditor from '../components/common/HoursEditor';
 
 interface PointForm {
   code: string;
@@ -54,14 +58,17 @@ interface PointForm {
   tactileContinuous: boolean;
   occupied: OccupiedLevel;
   problem: string;
+  weeklyHours: WeeklySlot[];
+  closureDays: ClosureDay[];
 }
 
 function defaultForm(): PointForm {
   const seq = `${Math.floor(Math.random() * 900) + 100}`;
+  const facilityType: FacilityType = '缘石坡道';
   return {
     code: `WZ-${new Date().getFullYear()}-${seq}`,
     name: '',
-    facilityType: '缘石坡道',
+    facilityType,
     district: '东城区',
     location: '',
     builtYear: new Date().getFullYear() - 5,
@@ -77,6 +84,8 @@ function defaultForm(): PointForm {
     tactileContinuous: true,
     occupied: '无',
     problem: '',
+    weeklyHours: defaultWeeklyHours(facilityType),
+    closureDays: [],
   };
 }
 
@@ -113,11 +122,23 @@ export default function PointNew() {
       location: draft.location,
       builtYear: draft.builtYear,
       maintainUnit: draft.maintainUnit,
+      weeklyHours: draft.weeklyHours,
+      closureDays: draft.closureDays,
       createdAt: '',
       updatedAt: '',
     };
     return [self, ...points];
   }, [draft, points]);
+
+  // 切换设施类型时，若周计划仍是上一类设施的默认值则联动替换；已自定义则保留
+  const changeFacilityType = (next: FacilityType) => {
+    const prevDefault = defaultWeeklyHours(draft.facilityType);
+    const isPrevDefault = JSON.stringify(draft.weeklyHours || []) === JSON.stringify(prevDefault);
+    patch({
+      facilityType: next,
+      weeklyHours: isPrevDefault ? defaultWeeklyHours(next) : draft.weeklyHours,
+    });
+  };
 
   const handleSubmit = async () => {
     if (!draft.name.trim()) {
@@ -144,6 +165,8 @@ export default function PointNew() {
         maintainUnit: draft.maintainUnit,
         lng: Number(draft.lng),
         lat: Number(draft.lat),
+        weeklyHours: draft.weeklyHours,
+        closureDays: draft.closureDays,
       });
       if (draft.withFirstInspection) {
         await addInspection({
@@ -227,7 +250,7 @@ export default function PointNew() {
                     <Select
                       id="facilityType"
                       value={draft.facilityType}
-                      onChange={(v) => patch({ facilityType: v })}
+                      onChange={(v) => changeFacilityType(v)}
                       options={FACILITY_TYPES.map((t) => ({
                         value: t,
                         label: (
@@ -441,6 +464,19 @@ export default function PointNew() {
             ) : (
               <Typography.Text type="secondary">已跳过首次核验，可在点位详情页随时补录。</Typography.Text>
             )}
+          </Card>
+
+          <Card
+            title="每周开放时段与闭馆日"
+            size="small"
+            style={{ marginTop: 16 }}
+            data-testid="point-hours"
+          >
+            <HoursEditor
+              facilityType={draft.facilityType}
+              value={{ weeklyHours: draft.weeklyHours, closureDays: draft.closureDays }}
+              onChange={(v) => patch({ weeklyHours: v.weeklyHours, closureDays: v.closureDays })}
+            />
           </Card>
         </Col>
 

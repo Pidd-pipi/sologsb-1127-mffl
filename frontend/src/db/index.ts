@@ -1,10 +1,11 @@
 import Dexie, { type Table } from 'dexie';
-import type { AccessPoint } from '../types/point';
+import type { AccessPoint, WeeklySlot } from '../types/point';
 import type { Inspection } from '../types/inspection';
 import type { RouteSegment } from '../types/route';
 import type { RectifyPlan } from '../types/rectify';
 import { addDays, makeId, todayStr, toPlain } from '../utils/format';
 import { judgeInspection } from '../utils/routeCheck';
+import { defaultWeeklyHours } from '../utils/hours';
 
 export const DB_NAME = 'gbaccessmap-db';
 
@@ -13,6 +14,8 @@ export const DB_NAME = 'gbaccessmap-db';
  * v1 建 points / inspections
  * v2 加 routes 表与 pointId 索引
  * v3 加 rectifies 表，并为历史不合格核验补建整改条目
+ * v4 点位增加每周开放时段 weeklyHours 与例外闭馆日 closureDays，
+ *    老点位按设施类型补默认时段
  */
 class AccessMapDb extends Dexie {
   points!: Table<AccessPoint, string>;
@@ -72,12 +75,38 @@ class AccessMapDb extends Dexie {
           });
         }
       });
+    this.version(4)
+      .stores({
+        points: 'id, code, facilityType, district, name',
+        inspections: 'id, pointId, date, conclusion',
+        routes: 'id, routeName, fromPointId, toPointId, order',
+        rectifies: 'id, pointId, status, deadline',
+      })
+      .upgrade(async (tx) => {
+        // v4：老点位补齐每周开放时段与闭馆日（缺省时按设施类型给默认周计划）
+        const table = tx.table<AccessPoint, string>('points');
+        const rows: AccessPoint[] = await table.toArray();
+        for (const row of rows) {
+          if (Array.isArray(row.weeklyHours) && Array.isArray(row.closureDays)) continue;
+          await table.update(row.id, {
+            weeklyHours: Array.isArray(row.weeklyHours)
+              ? row.weeklyHours
+              : defaultWeeklyHours(row.facilityType),
+            closureDays: Array.isArray(row.closureDays) ? row.closureDays : [],
+          });
+        }
+      });
   }
 }
 
 export const db = new AccessMapDb();
 
-const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
+const SEED_POINTS: (Omit<
+  AccessPoint,
+  'createdAt' | 'updatedAt' | 'weeklyHours' | 'closureDays'
+> & {
+  weeklyHours?: WeeklySlot[];
+})[] = [
   {
     id: 'pt-1001',
     code: 'WZ-2024-001',
@@ -173,8 +202,26 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '鲁谷路 35 号院 3 号楼东侧',
     builtYear: 2013,
     maintainUnit: '轨道交通运营部',
+    // 跨夜示例：每天 22:00 运营至次日 01:00
+    weeklyHours: [
+      { weekday: 1, start: '22:00', end: '01:00' },
+      { weekday: 2, start: '22:00', end: '01:00' },
+      { weekday: 3, start: '22:00', end: '01:00' },
+      { weekday: 4, start: '22:00', end: '01:00' },
+      { weekday: 5, start: '22:00', end: '01:00' },
+      { weekday: 6, start: '22:00', end: '01:00' },
+      { weekday: 7, start: '22:00', end: '01:00' },
+    ],
   },
 ];
+
+/** 示例例外闭馆日（相对首次建库日期，便于直接看到「已关闭·闭馆」状态） */
+const SEED_CLOSURES: Record<string, { offset: number; reason: string }> = {
+  // 西直门站无障碍电梯：今日设备检修闭馆
+  'pt-1003': { offset: 0, reason: '电梯设备年检检修' },
+  // 中关村广场无障碍卫生间：3 日后设备维护
+  'pt-1005': { offset: 3, reason: '卫生间设施维护' },
+};
 
 interface SeedInspection {
   pointId: string;
@@ -297,12 +344,29 @@ const SEED_ROUTES: SeedRoute[] = [
     stepCount: 0,
     curbHeight: 2,
   },
+  {
+    // 途经今日闭馆检修的西直门站无障碍电梯，用于演示已保存路线的受影响段
+    routeName: '朝阳—西直门换乘通道',
+    pointIds: ['pt-1004', 'pt-1003'],
+    length: 11800,
+    obstacleCount: 1,
+    stepCount: 0,
+    curbHeight: 2,
+  },
 ];
 
 function buildSeed() {
   const now = new Date().toISOString();
   const today = todayStr();
-  const points: AccessPoint[] = SEED_POINTS.map((p) => ({ ...p, createdAt: now, updatedAt: now }));
+  const points: AccessPoint[] = SEED_POINTS.map((p) => ({
+    ...p,
+    weeklyHours: p.weeklyHours ?? defaultWeeklyHours(p.facilityType),
+    closureDays: SEED_CLOSURES[p.id]
+      ? [{ date: addDays(today, SEED_CLOSURES[p.id].offset), reason: SEED_CLOSURES[p.id].reason }]
+      : [],
+    createdAt: now,
+    updatedAt: now,
+  }));
   const inspections: Inspection[] = SEED_INSPECTIONS.map((s, i) => {
     const judged = judgeInspection({
       slope: s.slope,
