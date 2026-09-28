@@ -37,25 +37,27 @@ docker compose down
 | `/` | 核验总览：按行政区与设施类型汇总点位数、合格率、待整改数，点击统计块下钻清单 | AccessPoint / Inspection / RectifyPlan |
 | `/points/new` | 点位登记：地图打点或手填经纬度，可同时录入首次核验实测值 | AccessPoint / Inspection |
 | `/points/:id` | 点位详情：地图定位与属性、核验历史、就地新增核验、整改跟踪 | 四个模型 |
-| `/routes` | 通行路线编制：选点自动串联路段，逐段填障碍数/台阶数/路缘高差，输出全线判定 | RouteSegment / AccessPoint |
-| `/map` | 设施地图：按设施类型着色渲染点位，点选弹出核验摘要 | AccessPoint / Inspection |
+| `/routes` | 通行路线编制：选择出发时间与点位，按里程（轮椅约 1.4 m/s）推算各点到达时刻；到达时已闭馆的点位不可入链；已保存路线标出受影响段与最近开放时间 | RouteSegment / AccessPoint |
+| `/map` | 设施地图：按设施类型着色渲染点位，点选弹出核验摘要与开放状态 | AccessPoint / Inspection |
 | `/rectify` | 整改清单：按状态与期限分组、逾期置顶，登记复检结果 | RectifyPlan / AccessPoint |
 
 ## 数据模型（`src/types/` 独立文件）
 
 | 模型 | 文件 | 关键字段 |
 | --- | --- | --- |
-| AccessPoint | `src/types/point.ts` | 点位编号、名称、设施类型、经纬度、行政区、所在道路或建筑、建成年代、养护单位 |
+| AccessPoint | `src/types/point.ts` | 点位编号、名称、设施类型、经纬度、行政区、所在道路或建筑、建成年代、养护单位、每周开放时段 `weeklyHours`、例外闭馆日 `closedDates` |
 | Inspection | `src/types/inspection.ts` | 核验日期、核验人、坡度 %、净宽 cm、扶手、盲道连续性、占用情况、结论、问题描述 |
-| RouteSegment | `src/types/route.ts` | 路线名称、起点/终点点位、长度、障碍数、台阶数、路缘高差、是否可轮椅通行 |
+| RouteSegment | `src/types/route.ts` | 路线名称、起点/终点点位、长度、障碍数、台阶数、路缘高差、是否可轮椅通行、规划出发时刻 `departAt` |
 | RectifyPlan | `src/types/rectify.ts` | 点位 id、整改要求、责任单位、整改期限、复检日期、状态 |
+| WeeklyHour / ClosedDate | `src/types/schedule.ts` | 星期（1=周一…7=周日）+ 开/闭时刻（`close ≤ open` 按次日跨夜计算）；闭馆日 YYYY-MM-DD + 原因，覆盖当周计划 |
 
 ## 数据存储
 
 - **IndexedDB（Dexie，库名 `gbaccessmap-db`）**：业务数据。含版本号与升级迁移：
   - `v1` 建 `points` / `inspections` 表；
   - `v2` 增加 `routes` 表与 `pointId` 相关索引；
-  - `v3` 增加 `rectifies` 表，并为历史「不合格」核验补建整改条目。
+  - `v3` 增加 `rectifies` 表，并为历史「不合格」核验补建整改条目；
+  - `v4` 点位补 `weeklyHours` / `closedDates`、路段补 `departAt`（老数据缺省为空：道路类按全天开放、老路线不做到达开放核验）。
 - **localStorage**：点位登记表单草稿（`gbaccessmap-draft:point-new`）与 UI 偏好（`gbaccessmap-ui`）。
 - 首次打开时自动写入一批示例数据，便于直接体验。
 - 容器无状态：不使用数据库服务、不挂载命名卷，清空浏览器存储即可重置数据。
@@ -80,15 +82,15 @@ sologsb-1127/
     ├── tsconfig*.json
     ├── public/favicon.svg
     └── src/
-        ├── types/{point,inspection,route,rectify}.ts
+        ├── types/{point,inspection,route,rectify,schedule}.ts
         ├── db/index.ts                     # Dexie 封装 + 版本迁移 + 示例数据
         ├── stores/{pointStore,routeStore,uiStore}.ts
-        ├── components/common/{MapPanel,StatusBadge,FacilityIcon,MeasureInput,EmptyState}.tsx
-        ├── hooks/{useAmapLoader,useInspectionFilter,useLocalDraft}.ts
+        ├── components/common/{MapPanel,StatusBadge,FacilityIcon,MeasureInput,EmptyState,OpenStatusTag,ScheduleEditor}.tsx
+        ├── hooks/{useAmapLoader,useInspectionFilter,useLocalDraft,useNow}.ts
         ├── pages/{Overview,PointNew,PointDetail,Routes,MapView,Rectify}.tsx
         ├── layouts/AppLayout.tsx
         ├── router/index.tsx
-        └── utils/{routeCheck,geo,format}.ts
+        └── utils/{routeCheck,geo,format,schedule,routeTiming}.ts
 ```
 
 ## 判定阈值（`src/utils/routeCheck.ts`）
@@ -96,3 +98,11 @@ sologsb-1127/
 - 坡度：≤ 5% 合格，> 5% 限期整改，> 8% 不合格；
 - 净宽：≥ 120cm 合格，< 120cm 限期整改，< 90cm 不合格；
 - 路缘高差：≤ 3cm 可轮椅通行，> 6cm 判定不可通行；存在台阶需绕行或增设坡道。
+
+## 开放时段与路线时刻
+
+- 仅无障碍电梯、无障碍卫生间、低位服务台按固定时段开放；坡道、盲道等道路类设施 `weeklyHours` 为空，按全天 24h 处理。
+- 周计划：`{ weekday(1-7), open, close }`，`close <= open` 视为跨夜，关门按**次日**计算；例外闭馆日整日不开放并覆盖周计划，跨夜段在闭馆日 00:00 截断。
+- 状态引擎（`src/utils/schedule.ts`）：任一时刻给出「开放中 / 30 分钟内即将关闭 / 已关闭」，并扫描后续 30 天给出最近可开放时间（今天 / 明天 / 后天 / 周几 / 月-日）。
+- 路线时刻（`src/utils/routeTiming.ts`）：选出发时间后，按轮椅 1.4 m/s 与各段里程顺序推算到达时刻；到达时已闭馆的点位在选点控件中禁用、链上标红且不能保存。已保存路线按落库的出发时刻重算，受影响点位高亮并给出最近开放时间；点位时段调整后地图、总览与路线页立即重算。
+- 核验历史与整改记录与开放时段相互独立，原有判定、逾期与闭环逻辑不变。

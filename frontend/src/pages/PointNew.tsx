@@ -32,6 +32,10 @@ import {
   type FacilityType,
 } from '../types/point';
 import { OCCUPIED_LEVELS, type OccupiedLevel } from '../types/inspection';
+import type { ClosedDate, WeeklyHour } from '../types/schedule';
+import { defaultWeeklyHours, isScheduledType } from '../types/schedule';
+import ScheduleEditor from '../components/common/ScheduleEditor';
+import OpenStatusTag from '../components/common/OpenStatusTag';
 import { judgeInspection } from '../utils/routeCheck';
 import { todayStr } from '../utils/format';
 
@@ -45,6 +49,8 @@ interface PointForm {
   maintainUnit: string;
   lng: number;
   lat: number;
+  weeklyHours: WeeklyHour[];
+  closedDates: ClosedDate[];
   withFirstInspection: boolean;
   inspector: string;
   inspectDate: string;
@@ -68,6 +74,8 @@ function defaultForm(): PointForm {
     maintainUnit: MAINTAIN_UNITS[0],
     lng: 116.4183,
     lat: 39.9142,
+    weeklyHours: [],
+    closedDates: [],
     withFirstInspection: true,
     inspector: '督导员 李维',
     inspectDate: todayStr(),
@@ -113,6 +121,8 @@ export default function PointNew() {
       location: draft.location,
       builtYear: draft.builtYear,
       maintainUnit: draft.maintainUnit,
+      weeklyHours: draft.weeklyHours,
+      closedDates: draft.closedDates,
       createdAt: '',
       updatedAt: '',
     };
@@ -144,6 +154,8 @@ export default function PointNew() {
         maintainUnit: draft.maintainUnit,
         lng: Number(draft.lng),
         lat: Number(draft.lat),
+        weeklyHours: draft.weeklyHours,
+        closedDates: draft.closedDates,
       });
       if (draft.withFirstInspection) {
         await addInspection({
@@ -227,7 +239,15 @@ export default function PointNew() {
                     <Select
                       id="facilityType"
                       value={draft.facilityType}
-                      onChange={(v) => patch({ facilityType: v })}
+                      onChange={(v) =>
+                        patch({
+                          facilityType: v,
+                          weeklyHours:
+                            draft.weeklyHours.length === 0 && isScheduledType(v)
+                              ? defaultWeeklyHours(v)
+                              : draft.weeklyHours,
+                        })
+                      }
                       options={FACILITY_TYPES.map((t) => ({
                         value: t,
                         label: (
@@ -315,6 +335,24 @@ export default function PointNew() {
             <Typography.Text type="secondary" className="gb-muted">
               <AimOutlined /> 右侧地图点击即可自动填入经纬度
             </Typography.Text>
+          </Card>
+
+          <Card title="开放时段与闭馆日" size="small" style={{ marginTop: 16 }} data-testid="schedule-card">
+            {!isScheduledType(draft.facilityType) ? (
+              <Typography.Text type="secondary" className="gb-muted" style={{ display: 'block', marginBottom: 10 }}>
+                {draft.facilityType} 为道路类设施，默认全天开放；如遇临时封闭可登记例外闭馆日。
+              </Typography.Text>
+            ) : null}
+            <ScheduleEditor
+              weeklyHours={isScheduledType(draft.facilityType) ? draft.weeklyHours : []}
+              closedDates={draft.closedDates}
+              onChange={(next) =>
+                patch({
+                  weeklyHours: isScheduledType(draft.facilityType) ? next.weeklyHours : [],
+                  closedDates: next.closedDates,
+                })
+              }
+            />
           </Card>
 
           <Card
@@ -465,6 +503,7 @@ export default function PointNew() {
               <Typography.Text type="secondary" className="gb-muted" data-testid="coord-preview">
                 经度 {Number(draft.lng).toFixed(6)} / 纬度 {Number(draft.lat).toFixed(6)}
               </Typography.Text>
+              <OpenStatusTag point={previewPoints[0]} at={new Date()} />
             </Space>
           </Card>
         </Col>

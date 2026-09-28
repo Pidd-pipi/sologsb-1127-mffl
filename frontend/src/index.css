@@ -79,3 +79,11 @@ body {
 .gb-overdue-row > td {
   background: #fff1f0 !important;
 }
+
+.gb-row-affected > td {
+  background: #fff1f0 !important;
+}
+
+.gb-row-affected:hover > td {
+  background: #ffccc7 !important;
+}

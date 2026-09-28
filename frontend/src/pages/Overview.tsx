@@ -18,12 +18,16 @@ import { Link } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { useInspectionFilter } from '../hooks/useInspectionFilter';
 import { useUiStore } from '../stores/uiStore';
+import { useNow } from '../hooks/useNow';
 import { DISTRICTS, FACILITY_TYPES, type AccessPoint } from '../types/point';
 import { CONCLUSIONS } from '../types/inspection';
 import type { RectifyPlan } from '../types/rectify';
 import StatusBadge from '../components/common/StatusBadge';
 import FacilityIcon from '../components/common/FacilityIcon';
+import OpenStatusTag from '../components/common/OpenStatusTag';
 import EmptyState from '../components/common/EmptyState';
+import { isScheduledType } from '../types/schedule';
+import { getOpenInfo } from '../utils/schedule';
 import { isOverdue, percent } from '../utils/format';
 
 interface GroupRow {
@@ -48,6 +52,21 @@ export default function Overview() {
   } = useInspectionFilter();
   const drill = useUiStore((s) => s.drill);
   const setDrill = useUiStore((s) => s.setDrill);
+  const now = useNow();
+
+  const openStats = useMemo(() => {
+    const scheduled = filteredPoints.filter((p) => isScheduledType(p.facilityType));
+    let open = 0;
+    let closing = 0;
+    let closed = 0;
+    for (const p of scheduled) {
+      const state = getOpenInfo(p, now).state;
+      if (state === 'open') open += 1;
+      else if (state === 'closing-soon') closing += 1;
+      else closed += 1;
+    }
+    return { scheduled: scheduled.length, open, closing, closed };
+  }, [filteredPoints, now]);
 
   const districtRows = useMemo<GroupRow[]>(
     () =>
@@ -108,6 +127,16 @@ export default function Overview() {
       title: '最新结论',
       width: 110,
       render: (_, row) => <StatusBadge value={latestByPoint.get(row.id)?.conclusion ?? '未核验'} kind="conclusion" />,
+    },
+    {
+      title: '开放状态',
+      width: 110,
+      render: (_, row) =>
+        isScheduledType(row.facilityType) ? (
+          <OpenStatusTag point={row} at={now} />
+        ) : (
+          <Typography.Text type="secondary">全天开放</Typography.Text>
+        ),
     },
     {
       title: '核验次数',
@@ -240,6 +269,39 @@ export default function Overview() {
         <Col xs={24} sm={12} lg={6}>
           <Card className="gb-stat-card" data-testid="stat-inspections">
             <Statistic title="核验记录" value={filteredInspections.length} suffix="次" />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} sm={8}>
+          <Card size="small" data-testid="stat-open">
+            <Statistic
+              title="当前开放（时段设施）"
+              value={openStats.open}
+              suffix={`/ ${openStats.scheduled}`}
+              valueStyle={{ color: '#389e0d' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card size="small" data-testid="stat-closing">
+            <Statistic
+              title="30 分钟内关闭"
+              value={openStats.closing}
+              suffix="处"
+              valueStyle={{ color: openStats.closing ? '#d48806' : undefined }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card size="small" data-testid="stat-closed">
+            <Statistic
+              title="已关闭（含闭馆日）"
+              value={openStats.closed}
+              suffix="处"
+              valueStyle={{ color: openStats.closed ? '#cf1322' : undefined }}
+            />
           </Card>
         </Col>
       </Row>

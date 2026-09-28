@@ -3,6 +3,7 @@ import type { AccessPoint } from '../types/point';
 import type { Inspection } from '../types/inspection';
 import type { RouteSegment } from '../types/route';
 import type { RectifyPlan } from '../types/rectify';
+import type { ClosedDate } from '../types/schedule';
 import { addDays, makeId, todayStr, toPlain } from '../utils/format';
 import { judgeInspection } from '../utils/routeCheck';
 
@@ -13,6 +14,7 @@ export const DB_NAME = 'gbaccessmap-db';
  * v1 建 points / inspections
  * v2 加 routes 表与 pointId 索引
  * v3 加 rectifies 表，并为历史不合格核验补建整改条目
+ * v4 点位加每周开放时段 / 例外闭馆日，路段加规划出发时刻
  */
 class AccessMapDb extends Dexie {
   points!: Table<AccessPoint, string>;
@@ -72,12 +74,34 @@ class AccessMapDb extends Dexie {
           });
         }
       });
+    this.version(4)
+      .stores({
+        points: 'id, code, facilityType, district, name',
+        inspections: 'id, pointId, date, conclusion',
+        routes: 'id, routeName, fromPointId, toPointId, order',
+        rectifies: 'id, pointId, status, deadline',
+      })
+      .upgrade(async (tx) => {
+        // v4：老点位补开放时段字段（缺省为空 = 全天开放）
+        const points = tx.table<AccessPoint, string>('points');
+        await points.toCollection().modify((p) => {
+          if (!Array.isArray(p.weeklyHours)) p.weeklyHours = [];
+          if (!Array.isArray(p.closedDates)) p.closedDates = [];
+        });
+        // 老路段补规划出发时刻（空串：不参与到达开放重算）
+        const routes = tx.table<RouteSegment, string>('routes');
+        await routes.toCollection().modify((r) => {
+          if (typeof r.departAt !== 'string') r.departAt = '';
+        });
+      });
   }
 }
 
 export const db = new AccessMapDb();
 
-const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
+const SEED_POINTS: Array<
+  Omit<AccessPoint, 'createdAt' | 'updatedAt' | 'closedDates'>
+> = [
   {
     id: 'pt-1001',
     code: 'WZ-2024-001',
@@ -89,6 +113,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '东单北大街与灯市口大街交叉口东南角',
     builtYear: 2016,
     maintainUnit: '市政道路养护一所',
+    weeklyHours: [],
   },
   {
     id: 'pt-1002',
@@ -101,6 +126,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '王府井大街南段 118 号门前',
     builtYear: 2018,
     maintainUnit: '市政道路养护二所',
+    weeklyHours: [],
   },
   {
     id: 'pt-1003',
@@ -113,6 +139,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '地铁西直门站 A 口地面层',
     builtYear: 2019,
     maintainUnit: '轨道交通运营部',
+    weeklyHours: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, open: '06:00', close: '23:00' })),
   },
   {
     id: 'pt-1004',
@@ -125,6 +152,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '朝阳公园南路南门西侧',
     builtYear: 2015,
     maintainUnit: '园林绿化服务中心',
+    weeklyHours: [],
   },
   {
     id: 'pt-1005',
@@ -137,6 +165,8 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '中关村大街 27 号地下二层',
     builtYear: 2020,
     maintainUnit: '城管委设施科',
+    // 夜间值守段跨零点，关门按次日计算
+    weeklyHours: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, open: '06:30', close: '00:00' })),
   },
   {
     id: 'pt-1006',
@@ -149,6 +179,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '丰台科技园政务大厅一层',
     builtYear: 2021,
     maintainUnit: '城管委设施科',
+    weeklyHours: [1, 2, 3, 4, 5].map((weekday) => ({ weekday, open: '09:00', close: '17:00' })),
   },
   {
     id: 'pt-1007',
@@ -161,6 +192,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '莲花池东路北侧辅路人行道',
     builtYear: 2014,
     maintainUnit: '市政道路养护一所',
+    weeklyHours: [],
   },
   {
     id: 'pt-1008',
@@ -173,8 +205,15 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '鲁谷路 35 号院 3 号楼东侧',
     builtYear: 2013,
     maintainUnit: '轨道交通运营部',
+    weeklyHours: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, open: '06:00', close: '22:30' })),
   },
 ];
+
+/** 相对首装日计算的例外闭馆日（保证示例中始终能看到闭馆覆盖周计划的效果） */
+const SEED_CLOSURES: Record<string, Array<{ offset: number; reason: string }>> = {
+  'pt-1003': [{ offset: 9, reason: '电梯年度维保' }],
+  'pt-1006': [{ offset: 2, reason: '政务大厅系统升级' }],
+};
 
 interface SeedInspection {
   pointId: string;
@@ -286,6 +325,8 @@ interface SeedRoute {
   obstacleCount: number;
   stepCount: number;
   curbHeight: number;
+  /** 规划出发时刻（本地时间 HH:mm，演示跨夜到达闭馆场景） */
+  departAt: string;
 }
 
 const SEED_ROUTES: SeedRoute[] = [
@@ -296,13 +337,29 @@ const SEED_ROUTES: SeedRoute[] = [
     obstacleCount: 1,
     stepCount: 0,
     curbHeight: 2,
+    departAt: '09:00',
+  },
+  {
+    routeName: '鲁谷—西直门—中关村夜间通道',
+    pointIds: ['pt-1008', 'pt-1003', 'pt-1005'],
+    length: 7600,
+    obstacleCount: 0,
+    stepCount: 0,
+    curbHeight: 2,
+    departAt: '03:00',
   },
 ];
 
 function buildSeed() {
   const now = new Date().toISOString();
   const today = todayStr();
-  const points: AccessPoint[] = SEED_POINTS.map((p) => ({ ...p, createdAt: now, updatedAt: now }));
+  const points: AccessPoint[] = SEED_POINTS.map((p) => {
+    const closures: ClosedDate[] = (SEED_CLOSURES[p.id] ?? []).map((c) => ({
+      date: addDays(today, c.offset),
+      reason: c.reason,
+    }));
+    return { ...p, closedDates: closures, createdAt: now, updatedAt: now };
+  });
   const inspections: Inspection[] = SEED_INSPECTIONS.map((s, i) => {
     const judged = judgeInspection({
       slope: s.slope,
@@ -328,6 +385,8 @@ function buildSeed() {
   });
   const routes: RouteSegment[] = [];
   SEED_ROUTES.forEach((r, ri) => {
+    // 示例出发时刻按今天本地时间落库
+    const departIso = new Date(`${today}T${r.departAt}:00`).toISOString();
     for (let i = 1; i < r.pointIds.length; i += 1) {
       routes.push({
         id: `rts-seed-${ri + 1}-${i}`,
@@ -339,6 +398,7 @@ function buildSeed() {
         stepCount: r.stepCount,
         curbHeight: r.curbHeight,
         wheelchairPassable: r.stepCount === 0 && r.curbHeight <= 3 && r.obstacleCount <= 2,
+        departAt: departIso,
         order: i,
         createdAt: now,
       });

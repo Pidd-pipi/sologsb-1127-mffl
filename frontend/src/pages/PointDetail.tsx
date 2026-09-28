@@ -25,9 +25,16 @@ import MeasureInput from '../components/common/MeasureInput';
 import StatusBadge from '../components/common/StatusBadge';
 import FacilityIcon from '../components/common/FacilityIcon';
 import EmptyState from '../components/common/EmptyState';
+import OpenStatusTag from '../components/common/OpenStatusTag';
+import ScheduleEditor from '../components/common/ScheduleEditor';
 import { usePointStore } from '../stores/pointStore';
+import type { AccessPoint } from '../types/point';
 import { OCCUPIED_LEVELS, type Inspection, type OccupiedLevel } from '../types/inspection';
 import type { RectifyPlan } from '../types/rectify';
+import type { ClosedDate, WeeklyHour } from '../types/schedule';
+import { isScheduledType } from '../types/schedule';
+import { describeClosedDates, describeWeeklyHours } from '../utils/schedule';
+import { useNow } from '../hooks/useNow';
 import { judgeInspection } from '../utils/routeCheck';
 import { addDays, isOverdue, todayStr } from '../utils/format';
 
@@ -51,6 +58,8 @@ export default function PointDetail() {
   const loaded = usePointStore((s) => s.loaded);
   const addInspection = usePointStore((s) => s.addInspection);
   const addRectify = usePointStore((s) => s.addRectify);
+  const updatePoint = usePointStore((s) => s.updatePoint);
+  const now = useNow();
 
   const point = useMemo(() => points.find((p) => p.id === id), [points, id]);
   const history = useMemo(
@@ -77,6 +86,12 @@ export default function PointDetail() {
     problem: '',
   }));
   const [saving, setSaving] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState(false);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [scheduleDraft, setScheduleDraft] = useState<{ weeklyHours: WeeklyHour[]; closedDates: ClosedDate[] }>({
+    weeklyHours: [],
+    closedDates: [],
+  });
 
   const judgement = useMemo(
     () =>
@@ -152,6 +167,22 @@ export default function PointDetail() {
       message.success('已生成整改条目');
     } catch (e) {
       message.error(`整改条目创建失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const handleSaveSchedule = async (next: {
+    weeklyHours: AccessPoint['weeklyHours'];
+    closedDates: AccessPoint['closedDates'];
+  }) => {
+    setSavingSchedule(true);
+    try {
+      await updatePoint(point.id, next);
+      message.success('开放时段已更新，地图、总览与已保存路线将立即重算');
+      setEditingSchedule(false);
+    } catch (e) {
+      message.error(`开放时段保存失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingSchedule(false);
     }
   };
 
@@ -260,11 +291,83 @@ export default function PointDetail() {
               <Descriptions.Item label="经纬度">
                 {point.lng.toFixed(6)}, {point.lat.toFixed(6)}
               </Descriptions.Item>
+              <Descriptions.Item label="当前开放状态">
+                <OpenStatusTag point={point} at={now} size="default" />
+              </Descriptions.Item>
+              <Descriptions.Item label="每周时段">
+                {describeWeeklyHours(point.weeklyHours)}
+              </Descriptions.Item>
+              <Descriptions.Item label="例外闭馆日">
+                {describeClosedDates(point) || '无'}
+              </Descriptions.Item>
               <Descriptions.Item label="核验次数">{history.length} 次</Descriptions.Item>
             </Descriptions>
           </Card>
         </Col>
       </Row>
+
+      <Card
+        title="开放时段与例外闭馆日"
+        size="small"
+        style={{ marginTop: 16 }}
+        data-testid="schedule-card"
+        extra={
+          editingSchedule ? null : (
+            <Button
+              size="small"
+              onClick={() => {
+                setScheduleDraft({
+                  weeklyHours: point.weeklyHours.map((h) => ({ ...h })),
+                  closedDates: point.closedDates.map((c) => ({ ...c })),
+                });
+                setEditingSchedule(true);
+              }}
+              data-testid="edit-schedule"
+            >
+              调整时段
+            </Button>
+          )
+        }
+      >
+        {editingSchedule ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <ScheduleEditor
+              weeklyHours={scheduleDraft.weeklyHours}
+              closedDates={scheduleDraft.closedDates}
+              size="middle"
+              onChange={(next) => setScheduleDraft(next)}
+            />
+            <Space>
+              <Button
+                type="primary"
+                loading={savingSchedule}
+                onClick={() => {
+                  void handleSaveSchedule(scheduleDraft);
+                }}
+                data-testid="save-schedule"
+              >
+                保存时段
+              </Button>
+              <Button onClick={() => setEditingSchedule(false)}>取消</Button>
+            </Space>
+          </Space>
+        ) : (
+          <Space direction="vertical" size={6}>
+            <Space size={8} wrap>
+              <Typography.Text strong>{describeWeeklyHours(point.weeklyHours)}</Typography.Text>
+              <OpenStatusTag point={point} at={now} size="default" />
+            </Space>
+            <Typography.Text type="secondary" className="gb-muted">
+              {isScheduledType(point.facilityType)
+                ? '跨夜时段关门按次日计算；闭馆日覆盖当周计划。'
+                : '道路类设施默认全天开放；闭馆日仍会覆盖开放状态。'}
+            </Typography.Text>
+            {point.closedDates.length ? (
+              <Typography.Text type="danger">近期闭馆：{describeClosedDates(point, 6)}</Typography.Text>
+            ) : null}
+          </Space>
+        )}
+      </Card>
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={14}>

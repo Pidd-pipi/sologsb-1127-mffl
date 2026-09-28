@@ -1,4 +1,6 @@
 /** 设施类型（六个枚举值，与提示词一致） */
+import type { ClosedDate, WeeklyHour } from './schedule';
+
 export type FacilityType =
   | '缘石坡道'
   | '盲道'
@@ -45,6 +47,10 @@ export interface AccessPoint {
   /** 建成年代 */
   builtYear: number;
   maintainUnit: string;
+  /** 每周开放时段；空数组表示全天开放（道路类设施）。跨夜段 close <= open 按次日计算 */
+  weeklyHours: WeeklyHour[];
+  /** 例外闭馆日，覆盖当周计划 */
+  closedDates: ClosedDate[];
   createdAt: string;
   updatedAt: string;
 }

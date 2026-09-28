@@ -15,6 +15,8 @@ export interface RouteSegment {
   curbHeight: number;
   /** 是否可轮椅通行（由逐段核验判定） */
   wheelchairPassable: boolean;
+  /** 规划出发时刻 ISO（路线按此推算各点到达开放状态）；老数据为空字符串 */
+  departAt: string;
   /** 在整条路线中的顺序，从 1 开始 */
   order: number;
   createdAt: string;
